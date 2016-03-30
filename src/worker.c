@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -27,7 +27,10 @@
 #include <signal.h>
 
 #include "kore.h"
+
+#if !defined(KORE_NO_HTTP)
 #include "http.h"
+#endif
 
 #if defined(KORE_USE_PGSQL)
 #include "pgsql.h"
@@ -41,6 +44,10 @@
 #define worker_debug(fmt, ...)		printf(fmt, ##__VA_ARGS__)
 #else
 #define worker_debug(fmt, ...)
+#endif
+
+#if !defined(WAIT_ANY)
+#define WAIT_ANY		(-1)
 #endif
 
 #define KORE_SHM_KEY		15000
@@ -102,7 +109,7 @@ kore_worker_init(void)
 	kore_debug("kore_worker_init(): starting %d workers", worker_count);
 
 	if (worker_count > cpu_count) {
-		kore_debug("kore_worker_init(): more workers then cpu's");
+		kore_debug("kore_worker_init(): more workers than cpu's");
 	}
 
 	cpu = 0;
@@ -263,6 +270,7 @@ kore_worker_entry(struct kore_worker *kw)
 	sig_recv = 0;
 	signal(SIGHUP, kore_signal);
 	signal(SIGQUIT, kore_signal);
+	signal(SIGTERM, kore_signal);
 	signal(SIGPIPE, SIG_IGN);
 
 	if (foreground)
@@ -271,7 +279,10 @@ kore_worker_entry(struct kore_worker *kw)
 		signal(SIGINT, SIG_IGN);
 
 	net_init();
+#if !defined(KORE_NO_HTTP)
 	http_init();
+	kore_accesslog_worker_init();
+#endif
 	kore_timer_init();
 	kore_connection_init();
 	kore_domain_load_crl();
@@ -281,7 +292,6 @@ kore_worker_entry(struct kore_worker *kw)
 	next_lock = 0;
 	idle_check = 0;
 	kore_platform_event_init();
-	kore_accesslog_worker_init();
 	kore_msg_worker_init();
 
 #if defined(KORE_USE_PGSQL)
@@ -297,10 +307,18 @@ kore_worker_entry(struct kore_worker *kw)
 
 	for (;;) {
 		if (sig_recv != 0) {
-			if (sig_recv == SIGHUP)
+			switch (sig_recv) {
+			case SIGHUP:
 				kore_module_reload(1);
-			else if (sig_recv == SIGQUIT || sig_recv == SIGINT)
+				break;
+			case SIGQUIT:
+			case SIGINT:
+			case SIGTERM:
 				quit = 1;
+				break;
+			default:
+				break;
+			}
 
 			sig_recv = 0;
 		}
@@ -330,7 +348,9 @@ kore_worker_entry(struct kore_worker *kw)
 			next_lock = now + WORKER_LOCK_TIMEOUT;
 		}
 
+#if !defined(KORE_NO_HTTP)
 		http_process();
+#endif
 
 		if ((now - idle_check) >= 10000) {
 			idle_check = now;
@@ -339,11 +359,22 @@ kore_worker_entry(struct kore_worker *kw)
 
 		kore_connection_prune(KORE_CONNECTION_PRUNE_DISCONNECT);
 
+#if !defined(KORE_NO_HTTP)
 		if (quit && http_request_count == 0)
 			break;
+#else
+		if (quit)
+			break;
+#endif
 	}
 
-	kore_connection_prune(KORE_CONNECTION_PRUNE_ALL);
+	kore_platform_event_cleanup();
+	kore_connection_cleanup();
+	kore_domain_cleanup();
+#if !defined(KORE_NO_HTTP)
+	http_cleanup();
+#endif
+	net_cleanup();
 	kore_debug("worker %d shutting down", kw->id);
 	exit(0);
 }

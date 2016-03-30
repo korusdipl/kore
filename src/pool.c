@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -22,6 +22,7 @@
 #define POOL_ELEMENT_FREE		1
 
 static void		pool_region_create(struct kore_pool *, u_int32_t);
+static void		pool_region_destroy(struct kore_pool *);
 
 void
 kore_pool_init(struct kore_pool *pool, const char *name,
@@ -39,6 +40,22 @@ kore_pool_init(struct kore_pool *pool, const char *name,
 	LIST_INIT(&(pool->freelist));
 
 	pool_region_create(pool, elm);
+}
+
+void
+kore_pool_cleanup(struct kore_pool *pool)
+{
+	pool->elms = 0;
+	pool->inuse = 0;
+	pool->elen = 0;
+	pool->slen = 0;
+
+	if (pool->name != NULL) {
+		kore_mem_free(pool->name);
+		pool->name = NULL;
+	}
+
+	pool_region_destroy(pool);
 }
 
 void *
@@ -64,10 +81,6 @@ kore_pool_get(struct kore_pool *pool)
 
 	pool->inuse++;
 
-#if defined(KORE_PEDANTIC_MALLOC)
-	explicit_bzero(ptr, pool->elen);
-#endif
-
 	return (ptr);
 }
 
@@ -75,10 +88,6 @@ void
 kore_pool_put(struct kore_pool *pool, void *ptr)
 {
 	struct kore_pool_entry		*entry;
-
-#if defined(KORE_PEDANTIC_MALLOC)
-	explicit_bzero(ptr, pool->elen);
-#endif
 
 	entry = (struct kore_pool_entry *)
 	    ((u_int8_t *)ptr - sizeof(struct kore_pool_entry));
@@ -118,4 +127,24 @@ pool_region_create(struct kore_pool *pool, u_int32_t elms)
 	}
 
 	pool->elms += elms;
+}
+
+static void
+pool_region_destroy(struct kore_pool *pool)
+{
+	struct kore_pool_region		*reg;
+
+	kore_debug("pool_region_destroy(%p)", pool);
+
+	/* Take care iterating when modifying list contents */
+	while (!LIST_EMPTY(&pool->regions)) {
+		reg = LIST_FIRST(&pool->regions);
+		LIST_REMOVE(reg, list);
+		kore_mem_free(reg->start);
+		kore_mem_free(reg);
+	}
+
+	/* Freelist references into the regions memory allocations */
+	LIST_INIT(&pool->freelist);
+	pool->elms = 0;
 }

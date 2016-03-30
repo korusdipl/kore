@@ -18,8 +18,12 @@ chroot		/home/joris/src/kore
 # Worker processes will run as the specified user.
 runas		joris
 
-# Set workers to the amount of CPU's available in your system,
-# kore will automatically distribute all workers on them.
+# How many worker processes Kore will spawn. If the directive
+# worker_set_affinity is set to 1 (the default) Kore will automatically
+# pin these worker processes to different CPU cores in your system.
+# NOTE: If you set this to the maximum number of cores you have
+# in your system (or more) you might consider turning off affinity
+# if you are running CPU heavy services on the same machine.
 workers		4
 
 # The number of active connections each worker can handle.
@@ -30,9 +34,14 @@ workers		4
 #worker_rlimit_nofiles		1024
 
 # Limit the number of new connections a worker can accept
-# in a single event loop.
-# NOTE: This can have a *MASSIVE* impact as this controls
-# how new connections are spread across worker processes.
+# in a single event loop. By default Kore will accept as
+# many new connections it can up to worker_max_connections.
+#
+# NOTE: If you are running benchmark tools that throw all
+# connections at Kore at the same time (when they are less
+# then worker_max_connections) or you have an actual reason
+# to not spend too much time in the accept loop this setting
+# will make a HUGE positive difference.
 #
 # This is disabled by default. If you wish to enable this
 # specify the number of connections a worker will accept
@@ -50,6 +59,17 @@ workers		4
 #	http_header_max		Maximum size of HTTP headers (in bytes).
 #
 #	http_body_max		Maximum size of an HTTP body (in bytes).
+#				If set to 0 disallows requests with a body
+#				all together.
+#
+#	http_body_disk_offload	Number of bytes after which Kore will use
+#				a temporary file to hold the HTTP body
+#				instead of holding it in memory. If set to
+#				0 no disk offloading will be done. This is
+#				turned off by default.
+#
+#	http_body_disk_path	Path where Kore will store any temporary
+#				HTTP body files.
 #
 #	http_keepalive_time	Maximum seconds an HTTP connection can be
 #				kept alive by the browser.
@@ -62,10 +82,12 @@ workers		4
 #	http_request_limit	Limit the number of requests Kore processes
 #				in a single event loop.
 #http_header_max	4096
-#http_body_max		10240000
+#http_body_max		1024000
 #http_keepalive_time	0
 #http_hsts_enable	31536000
 #http_request_limit	1000
+#http_body_disk_offload	0
+#http_body_disk_path	tmp_files
 
 # Websocket specific settings.
 #	websocket_maxframe	Specifies the maximum frame size we can receive
@@ -100,13 +122,8 @@ validator	v_session	function	v_session_validate
 # Specify the TLS ciphers that will be used.
 #tls_cipher	ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-AES256-GCM-SHA384:kEDH+AESGCM:ECDHE-RSA-AES128-SHA256:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA:ECDHE-ECDSA-AES128-SHA:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA:ECDHE-ECDSA-AES256-SHA:DHE-RSA-AES128-SHA256:DHE-RSA-AES128-SHA:DHE-RSA-AES256-SHA256:DHE-DSS-AES256-SHA:AES128-GCM-SHA256:AES256-GCM-SHA384:HIGH:!aNULL:!eNULL:!EXPORT:!DES:!3DES:!MD5:!PSK:!kRSA:!kDSA
 
-# If you wish to use EDH / ECDH specify a file containing
-# a generated DH key (See OpenSSL dhparam).
+# Required DH parameters for TLS.
 #tls_dhparam	dh2048.pem
-
-# Specify the amount of seconds a SPDY connection is kept open.
-# You can keep it open indefinitely by setting this to 0.
-#spdy_idle_time		120
 
 # Authentication configuration
 #
@@ -187,7 +204,6 @@ domain localhost {
 	static		/			serve_index
 	static		/intro.jpg		serve_intro
 	static		/b64test		serve_b64test
-	static		/spdy-reset		serve_spdyreset
 	static		/upload			serve_file_upload
 	static		/lock-test		serve_lock_test
 	static		/validator		serve_validator

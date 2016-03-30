@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -49,8 +49,8 @@ kore_malloc(size_t len)
 		fatal("kore_malloc(): zero size");
 
 	mlen = sizeof(u_int32_t) + len + sizeof(struct meminfo);
-	if ((ptr = malloc(mlen)) == NULL)
-		fatal("kore_malloc(%d): %d", len, errno);
+	if ((ptr = calloc(1, mlen)) == NULL)
+		fatal("kore_malloc(%zd): %d", len, errno);
 
 	plen = (u_int32_t *)ptr;
 	*plen = len;
@@ -58,10 +58,6 @@ kore_malloc(size_t len)
 
 	mem = KORE_MEMINFO(addr);
 	mem->magic = KORE_MEM_MAGIC;
-
-#if defined(KORE_PEDANTIC_MALLOC)
-	explicit_bzero(addr, len);
-#endif
 
 	return (addr);
 }
@@ -96,7 +92,7 @@ kore_calloc(size_t memb, size_t len)
 	if (memb == 0 || len == 0)
 		fatal("kore_calloc(): zero size");
 	if (SIZE_MAX / memb < len)
-		fatal("kore_calloc: memb * len > SIZE_MAX");
+		fatal("kore_calloc(): memb * len > SIZE_MAX");
 
 	return (kore_malloc(memb * len));
 }
@@ -114,10 +110,6 @@ kore_mem_free(void *ptr)
 	if (mem->magic != KORE_MEM_MAGIC)
 		fatal("kore_mem_free(): magic boundary not found");
 
-#if defined(KORE_PEDANTIC_MALLOC)
-	explicit_bzero(ptr, KORE_MEMSIZE(ptr));
-#endif
-
 	addr = (u_int8_t *)ptr - sizeof(u_int32_t);
 	free(addr);
 }
@@ -134,11 +126,3 @@ kore_strdup(const char *str)
 
 	return (nstr);
 }
-
-#if defined(KORE_PEDANTIC_MALLOC)
-void
-explicit_bzero(void *addr, size_t len)
-{
-	bzero(addr, len);
-}
-#endif

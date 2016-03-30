@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -26,7 +26,6 @@ void
 kore_module_init(void)
 {
 	TAILQ_INIT(&modules);
-	TAILQ_INIT(&domains);
 }
 
 void
@@ -52,7 +51,7 @@ kore_module_load(const char *path, const char *onload)
 
 	if (onload != NULL) {
 		module->onload = kore_strdup(onload);
-		module->ocb = dlsym(module->handle, onload);
+		*(void **)&(module->ocb) = dlsym(module->handle, onload);
 		if (module->ocb == NULL)
 			fatal("%s: onload '%s' not present", path, onload);
 	}
@@ -108,7 +107,8 @@ kore_module_reload(int cbs)
 			fatal("kore_module_reload(): %s", dlerror());
 
 		if (module->onload != NULL) {
-			module->ocb = dlsym(module->handle, module->onload);
+			*(void **)&(module->ocb) =
+			    dlsym(module->handle, module->onload);
 			if (module->ocb == NULL) {
 				fatal("%s: onload '%s' not present",
 				    module->path, module->onload);
@@ -130,7 +130,9 @@ kore_module_reload(int cbs)
 		}
 	}
 
+#if !defined(KORE_NO_HTTP)
 	kore_validator_reload();
+#endif
 }
 
 int
@@ -142,6 +144,7 @@ kore_module_loaded(void)
 	return (1);
 }
 
+#if !defined(KORE_NO_HTTP)
 int
 kore_module_handler_new(const char *path, const char *domain,
     const char *func, const char *auth, int type)
@@ -183,9 +186,7 @@ kore_module_handler_new(const char *path, const char *domain,
 	if (hdlr->type == HANDLER_TYPE_DYNAMIC) {
 		if (regcomp(&(hdlr->rctx), hdlr->path,
 		    REG_EXTENDED | REG_NOSUB)) {
-			kore_mem_free(hdlr->func);
-			kore_mem_free(hdlr->path);
-			kore_mem_free(hdlr);
+			kore_module_handler_free(hdlr);
 			kore_debug("regcomp() on %s failed", path);
 			return (KORE_RESULT_ERROR);
 		}
@@ -193,6 +194,32 @@ kore_module_handler_new(const char *path, const char *domain,
 
 	TAILQ_INSERT_TAIL(&(dom->handlers), hdlr, list);
 	return (KORE_RESULT_OK);
+}
+
+void
+kore_module_handler_free(struct kore_module_handle *hdlr)
+{
+	struct kore_handler_params *param;
+
+	if (hdlr == NULL)
+		return;
+
+	if (hdlr->func != NULL)
+		kore_mem_free(hdlr->func);
+	if (hdlr->path != NULL)
+		kore_mem_free(hdlr->path);
+	if (hdlr->type == HANDLER_TYPE_DYNAMIC)
+		regfree(&(hdlr->rctx));
+
+	/* Drop all validators associated with this handler */
+	while ((param = TAILQ_FIRST(&(hdlr->params))) != NULL) {
+		TAILQ_REMOVE(&(hdlr->params), param, list);
+		if (param->name != NULL)
+			kore_mem_free(param->name);
+		kore_mem_free(param);
+	}
+
+	kore_mem_free(hdlr);
 }
 
 struct kore_module_handle *
@@ -216,6 +243,8 @@ kore_module_handler_find(const char *domain, const char *path)
 
 	return (NULL);
 }
+
+#endif /* !KORE_NO_HTTP */
 
 void *
 kore_module_getsym(const char *symbol)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -69,6 +69,20 @@ kore_platform_event_init(void)
 
 	event_count = worker_max_connections + nlisteners;
 	events = kore_calloc(event_count, sizeof(struct epoll_event));
+}
+
+void
+kore_platform_event_cleanup(void)
+{
+	if (efd != -1) {
+		close(efd);
+		efd = -1;
+	}
+
+	if (events != NULL) {
+		kore_mem_free(events);
+		events = NULL;
+	}
 }
 
 int
@@ -154,7 +168,7 @@ kore_platform_event_wait(u_int64_t timer)
 			    !(c->flags & CONN_WRITE_BLOCK))
 				c->flags |= CONN_WRITE_POSSIBLE;
 
-			if (!kore_connection_handle(c))
+			if (c->handle != NULL && !c->handle(c))
 				kore_connection_disconnect(c);
 			break;
 #if defined(KORE_USE_PGSQL)
@@ -206,6 +220,12 @@ void
 kore_platform_schedule_read(int fd, void *data)
 {
 	kore_platform_event_schedule(fd, EPOLLIN, 0, data);
+}
+
+void
+kore_platform_schedule_write(int fd, void *data)
+{
+	kore_platform_event_schedule(fd, EPOLLOUT, 0, data);
 }
 
 void

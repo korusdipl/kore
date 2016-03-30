@@ -11,7 +11,6 @@ Because of this Kore is an ideal candidate for building robust, scalable and sec
 Features
 --------
 * Supports SNI
-* Supports SPDY/3.1
 * Supports HTTP/1.1
 * Websocket support
 * Lightweight background tasks
@@ -41,6 +40,10 @@ Latest release
 --------------
 * [2015-05-21] version 1.2.3 - https://kore.io/release/kore-1.2.3-release.tgz
 
+Upcoming release
+----------------
+* Kore 2.0.0 will be released 1st of May 2016.
+
 Old releases
 ------------
 * [2015-04-09] version 1.2.2 - https://kore.io/release/kore-1.2.2-release.tgz
@@ -52,8 +55,8 @@ Building Kore
 -------------
 
 Requirements
-* libz
-* openssl >= 1.0.1i
+* openssl (latest is always the safest bet, right?)
+  (note: this requirement drops away when building with NOTLS=1 NOHTTP=1)
 
 Requirements for background tasks (optional)
 * pthreads
@@ -64,7 +67,6 @@ Requirements for pgsql (optional)
 Normal compilation and installation:
 
 ```
-# git clone https://github.com/jorisvink/kore.git
 # cd kore
 # make
 # make install
@@ -76,8 +78,9 @@ those by setting a shell environment variable before running **_make_**.
 * TASKS=1 (compiles in task support)
 * PGSQL=1 (compiles in pgsql support)
 * DEBUG=1 (enables use of -d for debug)
-* NOTLS=1 (compiles Kore without OpenSSL)
-* KORE_PEDANTIC_MALLOC=1 (zero all allocated memory)
+* NOTLS=1 (compiles Kore without TLS)
+* NOHTTP=1 (compiles Kore without HTTP support)
+* NOOPT=1 (disable compiler optimizations)
 
 Example libraries
 -----------------
@@ -95,5 +98,7 @@ Bugs, contributions and more
 
 If you run into any bugs, have suggestions or patches please
 contact me at joris@coders.se.
+
+If you feel like hanging out or just chatting there is an [IRC chatroom (#kore-dev@irc.freenode.org)](https://webchat.freenode.net?channels=kore-dev).
 
 More information can be found on https://kore.io/

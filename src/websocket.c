@@ -16,7 +16,10 @@
 
 #include <sys/param.h>
 
+#include <openssl/sha.h>
+
 #include <limits.h>
+#include <string.h>
 
 #include "kore.h"
 #include "http.h"
@@ -59,25 +62,19 @@ kore_websocket_handshake(struct http_request *req, struct kore_wscbs *wscbs)
 	}
 
 	if (!http_request_header(req, "sec-websocket-version", &version)) {
-		kore_mem_free(key);
 		http_response_header(req, "sec-websocket-version", "13");
 		http_response(req, HTTP_STATUS_BAD_REQUEST, NULL, 0);
 		return;
 	}
 
 	if (strcmp(version, "13")) {
-		kore_mem_free(key);
-		kore_mem_free(version);
 		http_response_header(req, "sec-websocket-version", "13");
 		http_response(req, HTTP_STATUS_BAD_REQUEST, NULL, 0);
 		return;
 	}
 
-	kore_mem_free(version);
-
 	buf = kore_buf_create(128);
 	kore_buf_appendf(buf, "%s%s", key, WEBSOCKET_SERVER_RESPONSE);
-	kore_mem_free(key);
 
 	(void)SHA1_Init(&sctx);
 	(void)SHA1_Update(&sctx, buf->data, buf->offset);
@@ -121,7 +118,7 @@ kore_websocket_send(struct connection *c, u_int8_t op, const void *data,
 
 	frame = kore_buf_create(len);
 	websocket_frame_build(frame, op, data, len);
-	net_send_queue(c, frame->data, frame->offset, NULL, NETBUF_LAST_CHAIN);
+	net_send_queue(c, frame->data, frame->offset);
 	kore_buf_free(frame);
 }
 
@@ -137,8 +134,7 @@ kore_websocket_broadcast(struct connection *src, u_int8_t op, const void *data,
 
 	TAILQ_FOREACH(c, &connections, list) {
 		if (c != src && c->proto == CONN_PROTO_WEBSOCKET) {
-			net_send_queue(c, frame->data, frame->offset,
-			    NULL, NETBUF_LAST_CHAIN);
+			net_send_queue(c, frame->data, frame->offset);
 			net_send_flush(c);
 		}
 	}

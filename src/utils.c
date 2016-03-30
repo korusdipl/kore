@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,6 +16,12 @@
 
 #include <sys/time.h>
 
+#include <ctype.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <string.h>
+#include <stdlib.h>
+#include <time.h>
 #include <limits.h>
 
 #include "kore.h"
@@ -203,6 +209,9 @@ kore_split_string(char *input, char *delim, char **out, size_t ele)
 	int		count;
 	char		**ap;
 
+	if (ele == 0)
+		return (0);
+
 	count = 0;
 	for (ap = out; ap < &out[ele - 1] &&
 	    (*ap = strsep(&input, delim)) != NULL;) {
@@ -217,7 +226,7 @@ kore_split_string(char *input, char *delim, char **out, size_t ele)
 }
 
 void
-kore_strip_chars(char *in, char strip, char **out)
+kore_strip_chars(char *in, const char strip, char **out)
 {
 	u_int32_t	len;
 	char		*s, *p;
@@ -490,6 +499,51 @@ kore_mem_find(void *src, size_t slen, void *needle, u_int32_t len)
 	}
 
 	return (NULL);
+}
+
+char *
+kore_text_trim(char *string, size_t len)
+{
+	char		*end;
+
+	if (len == 0)
+		return (string);
+
+	end = string + len;
+	while (isspace(*string))
+		string++;
+
+	while (isspace(*end) && end > string)
+		*(end)-- = '\0';
+
+	return (string);
+}
+
+char *
+kore_read_line(FILE *fp, char *in, size_t len)
+{
+	char	*p, *t;
+
+	if (fgets(in, len, fp) == NULL)
+		return (NULL);
+
+	p = in;
+	in[strcspn(in, "\n")] = '\0';
+
+	while (isspace(*p))
+		p++;
+
+	if (p[0] == '#' || p[0] == '\0') {
+		p[0] = '\0';
+		return (p);
+	}
+
+	for (t = p; *t != '\0'; t++) {
+		if (*t == '\t')
+			*t = ' ';
+	}
+
+	return (p);
 }
 
 void

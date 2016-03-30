@@ -42,16 +42,16 @@ open_connection(struct http_request *req)
 {
 	char			*host, *port;
 
-	/* Don't want to deal with SPDY connections. */
+	/* Make sure its HTTP. */
 	if (req->owner->proto != CONN_PROTO_HTTP) {
 		http_response(req, HTTP_STATUS_BAD_REQUEST, NULL, 0);
 		return (KORE_RESULT_OK);
 	}
 
 	/* Parse the query string and grab our arguments. */
-	http_populate_arguments(req);
-	if (!http_argument_get_string("host", &host, NULL) ||
-	    !http_argument_get_string("port", &port, NULL)) {
+	http_populate_get(req);
+	if (!http_argument_get_string(req, "host", &host) ||
+	    !http_argument_get_string(req, "port", &port)) {
 		http_response(req, HTTP_STATUS_BAD_REQUEST, NULL, 0);
 		return (KORE_RESULT_OK);
 	}
@@ -121,6 +121,8 @@ ktunnel_pipe_create(struct connection *c, const char *host, const char *port)
 	}
 
 	cpipe = kore_connection_new(c);
+	TAILQ_INSERT_TAIL(&connections, cpipe, list);
+
 	cpipe->fd = fd;
 	cpipe->addr.ipv4 = sin;
 	cpipe->read = net_read;
@@ -161,7 +163,7 @@ ktunnel_pipe_data(struct netbuf *nb)
 
 	printf("received %d bytes on pipe %p (-> %p)\n", nb->s_off, src, dst);
 
-	net_send_queue(dst, nb->buf, nb->s_off, NULL, NETBUF_LAST_CHAIN);
+	net_send_queue(dst, nb->buf, nb->s_off);
 	net_send_flush(dst);
 	net_recv_reset(src, NETBUF_SEND_PAYLOAD_MAX, ktunnel_pipe_data);
 

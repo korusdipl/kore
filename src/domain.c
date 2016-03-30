@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -16,14 +16,19 @@
 
 #include <sys/param.h>
 
+#include <fnmatch.h>
+
 #include "kore.h"
 
 #define SSL_SESSION_ID		"kore_ssl_sessionid"
 
 struct kore_domain_h		domains;
 struct kore_domain		*primary_dom = NULL;
+
+#if !defined(KORE_NO_TLS)
 DH				*tls_dhparam = NULL;
 int				tls_version = KORE_TLS_VERSION_1_2;
+#endif
 
 static void	domain_load_crl(struct kore_domain *);
 
@@ -35,6 +40,17 @@ void
 kore_domain_init(void)
 {
 	TAILQ_INIT(&domains);
+}
+
+void
+kore_domain_cleanup(void)
+{
+	struct kore_domain *dom;
+
+	while ((dom = TAILQ_FIRST(&domains)) != NULL) {
+		TAILQ_REMOVE(&domains, dom, list);
+		kore_domain_free(dom);
+	}
 }
 
 int
@@ -49,11 +65,13 @@ kore_domain_new(char *domain)
 
 	dom = kore_malloc(sizeof(*dom));
 	dom->accesslog = -1;
+#if !defined(KORE_NO_TLS)
 	dom->cafile = NULL;
 	dom->certkey = NULL;
 	dom->ssl_ctx = NULL;
 	dom->certfile = NULL;
 	dom->crlfile = NULL;
+#endif
 	dom->domain = kore_strdup(domain);
 	TAILQ_INIT(&(dom->handlers));
 	TAILQ_INSERT_TAIL(&domains, dom, list);
@@ -62,6 +80,46 @@ kore_domain_new(char *domain)
 		primary_dom = dom;
 
 	return (KORE_RESULT_OK);
+}
+
+void
+kore_domain_free(struct kore_domain *dom)
+{
+#if !defined(KORE_NO_HTTP)
+	struct kore_module_handle *hdlr;
+#endif
+	if (dom == NULL)
+		return;
+
+	if (primary_dom == dom)
+		primary_dom = NULL;
+
+	TAILQ_REMOVE(&domains, dom, list);
+
+	if (dom->domain != NULL)
+		kore_mem_free(dom->domain);
+
+#if !defined(KORE_NO_TLS)
+	if (dom->ssl_ctx != NULL)
+		SSL_CTX_free(dom->ssl_ctx);
+	if (dom->cafile != NULL)
+		kore_mem_free(dom->cafile);
+	if (dom->certkey != NULL)
+		kore_mem_free(dom->certkey);
+	if (dom->certfile != NULL)
+		kore_mem_free(dom->certfile);
+	if (dom->crlfile != NULL)
+		kore_mem_free(dom->crlfile);
+#endif
+
+#if !defined(KORE_NO_HTTP)
+	/* Drop all handlers associated with this domain */
+	while ((hdlr = TAILQ_FIRST(&(dom->handlers))) != NULL) {
+		TAILQ_REMOVE(&(dom->handlers), hdlr, list);
+		kore_module_handler_free(hdlr);
+	}
+#endif
+	kore_mem_free(dom);
 }
 
 void
@@ -170,11 +228,11 @@ kore_domain_sslstart(struct kore_domain *dom)
 
 	SSL_CTX_set_info_callback(dom->ssl_ctx, kore_tls_info_callback);
 	SSL_CTX_set_tlsext_servername_callback(dom->ssl_ctx, kore_tls_sni_cb);
-	SSL_CTX_set_next_protos_advertised_cb(dom->ssl_ctx,
-	    kore_tls_npn_cb, NULL);
 
 	kore_mem_free(dom->certfile);
 	kore_mem_free(dom->certkey);
+	dom->certfile = NULL;
+	dom->certkey = NULL;
 #endif
 }
 
@@ -184,7 +242,7 @@ kore_domain_lookup(const char *domain)
 	struct kore_domain	*dom;
 
 	TAILQ_FOREACH(dom, &domains, list) {
-		if (!strcmp(dom->domain, domain))
+		if (!fnmatch(dom->domain, domain, FNM_CASEFOLD))
 			return (dom);
 	}
 
@@ -196,8 +254,11 @@ kore_domain_closelogs(void)
 {
 	struct kore_domain	*dom;
 
-	TAILQ_FOREACH(dom, &domains, list)
-		close(dom->accesslog);
+	TAILQ_FOREACH(dom, &domains, list) {
+		if (dom->accesslog != -1) {
+			(void)close(dom->accesslog);
+		}
+	}
 }
 
 void

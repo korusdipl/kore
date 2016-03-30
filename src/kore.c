@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -15,13 +15,20 @@
  */
 
 #include <sys/types.h>
+#include <sys/stat.h>
+
 #include <sys/socket.h>
 #include <sys/resource.h>
 
+#include <stdio.h>
 #include <netdb.h>
 #include <signal.h>
 
 #include "kore.h"
+
+#if !defined(KORE_NO_HTTP)
+#include "http.h"
+#endif
 
 volatile sig_atomic_t			sig_recv;
 
@@ -68,11 +75,20 @@ version(void)
 {
 	printf("kore %d.%d.%d-%s ", KORE_VERSION_MAJOR, KORE_VERSION_MINOR,
 	    KORE_VERSION_PATCH, KORE_VERSION_STATE);
+#if defined(KORE_NO_TLS)
+	printf("no-tls ");
+#endif
+#if defined(KORE_NO_HTTP)
+	printf("no-http ");
+#endif
 #if defined(KORE_USE_PGSQL)
 	printf("pgsql ");
 #endif
 #if defined(KORE_USE_TASKS)
 	printf("tasks ");
+#endif
+#if defined(KORE_DEBUG)
+	printf("debug ");
 #endif
 	printf("\n");
 
@@ -136,10 +152,12 @@ main(int argc, char *argv[])
 	LIST_INIT(&listeners);
 
 	kore_log_init();
+#if !defined(KORE_NO_HTTP)
 	kore_auth_init();
+	kore_validator_init();
+#endif
 	kore_domain_init();
 	kore_module_init();
-	kore_validator_init();
 	kore_server_sslstart();
 
 	if (config_file == NULL)
@@ -147,11 +165,22 @@ main(int argc, char *argv[])
 
 	kore_parse_config();
 	kore_platform_init();
+
+#if !defined(KORE_NO_HTTP)
 	kore_accesslog_init();
+	if (http_body_disk_offload > 0) {
+		if (mkdir(http_body_disk_path, 0700) == -1 && errno != EEXIST) {
+			printf("can't create http_body_disk_path '%s': %s\n",
+			    http_body_disk_path, errno_s);
+			return (KORE_RESULT_ERROR);
+		}
+	}
+#endif
 
 	sig_recv = 0;
 	signal(SIGHUP, kore_signal);
 	signal(SIGQUIT, kore_signal);
+	signal(SIGTERM, kore_signal);
 
 	if (foreground)
 		signal(SIGINT, kore_signal);
@@ -174,17 +203,6 @@ main(int argc, char *argv[])
 }
 
 #if !defined(KORE_NO_TLS)
-int
-kore_tls_npn_cb(SSL *ssl, const u_char **data, unsigned int *len, void *arg)
-{
-	kore_debug("kore_tls_npn_cb(): sending protocols");
-
-	*data = (const unsigned char *)KORE_SSL_PROTO_STRING;
-	*len = strlen(KORE_SSL_PROTO_STRING);
-
-	return (SSL_TLSEXT_ERR_OK);
-}
-
 int
 kore_tls_sni_cb(SSL *ssl, int *ad, void *arg)
 {
@@ -225,7 +243,7 @@ kore_tls_info_callback(const SSL *ssl, int flags, int ret)
 #endif
 
 int
-kore_server_bind(const char *ip, const char *port)
+kore_server_bind(const char *ip, const char *port, const char *ccb)
 {
 	struct listener		*l;
 	int			on, r;
@@ -293,6 +311,18 @@ kore_server_bind(const char *ip, const char *port)
 		kore_debug("listen(): %s", errno_s);
 		printf("failed to listen on socket: %s\n", errno_s);
 		return (KORE_RESULT_ERROR);
+	}
+
+	if (ccb != NULL) {
+		*(void **)&(l->connect) = kore_module_getsym(ccb);
+		if (l->connect == NULL) {
+			printf("no such callback: '%s'\n", ccb);
+			close(l->fd);
+			kore_mem_free(l);
+			return (KORE_RESULT_ERROR);
+		}
+	} else {
+		l->connect = NULL;
 	}
 
 	nlisteners++;
@@ -371,6 +401,7 @@ kore_server_start(void)
 				break;
 			case SIGINT:
 			case SIGQUIT:
+			case SIGTERM:
 				quit = 1;
 				kore_worker_dispatch_signal(sig_recv);
 				continue;
@@ -387,6 +418,11 @@ kore_server_start(void)
 		kore_platform_event_wait(100);
 		kore_connection_prune(KORE_CONNECTION_PRUNE_DISCONNECT);
 	}
+
+	kore_platform_event_cleanup();
+	kore_connection_cleanup();
+	kore_domain_cleanup();
+	net_cleanup();
 }
 
 static void

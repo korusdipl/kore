@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 Joris Vink <joris@coders.se>
+ * Copyright (c) 2013-2016 Joris Vink <joris@coders.se>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -37,35 +37,38 @@ net_init(void)
 }
 
 void
-net_send_queue(struct connection *c, const void *data, u_int32_t len,
-    struct spdy_stream *s, int before)
+net_cleanup(void)
+{
+	kore_debug("net_cleanup()");
+	kore_pool_cleanup(&nb_pool);
+}
+
+void
+net_send_queue(struct connection *c, const void *data, u_int32_t len)
 {
 	const u_int8_t		*d;
 	struct netbuf		*nb;
 	u_int32_t		avail;
 
-	kore_debug("net_send_queue(%p, %p, %d, %p, %d)",
-	    c, data, len, s, before);
+	kore_debug("net_send_queue(%p, %p, %d)", c, data, len);
 
 	d = data;
-	if (before == NETBUF_LAST_CHAIN) {
-		nb = TAILQ_LAST(&(c->send_queue), netbuf_head);
-		if (nb != NULL && !(nb->flags & NETBUF_IS_STREAM) &&
-		    nb->stream == s && nb->b_len < nb->m_len) {
-			avail = nb->m_len - nb->b_len;
-			if (len < avail) {
-				memcpy(nb->buf + nb->b_len, d, len);
-				nb->b_len += len;
-				return;
-			} else if (len > avail) {
-				memcpy(nb->buf + nb->b_len, d, avail);
-				nb->b_len += avail;
+	nb = TAILQ_LAST(&(c->send_queue), netbuf_head);
+	if (nb != NULL && !(nb->flags & NETBUF_IS_STREAM) &&
+	    nb->b_len < nb->m_len) {
+		avail = nb->m_len - nb->b_len;
+		if (len < avail) {
+			memcpy(nb->buf + nb->b_len, d, len);
+			nb->b_len += len;
+			return;
+		} else {
+			memcpy(nb->buf + nb->b_len, d, avail);
+			nb->b_len += avail;
 
-				len -= avail;
-				d += avail;
-				if (len == 0)
-					return;
-			}
+			len -= avail;
+			d += avail;
+			if (len == 0)
+				return;
 		}
 	}
 
@@ -74,7 +77,6 @@ net_send_queue(struct connection *c, const void *data, u_int32_t len,
 	nb->cb = NULL;
 	nb->owner = c;
 	nb->s_off = 0;
-	nb->stream = s;
 	nb->b_len = len;
 	nb->type = NETBUF_SEND;
 
@@ -87,27 +89,22 @@ net_send_queue(struct connection *c, const void *data, u_int32_t len,
 	if (len > 0)
 		memcpy(nb->buf, d, nb->b_len);
 
-	if (before == NETBUF_BEFORE_CHAIN) {
-		TAILQ_INSERT_BEFORE(c->snb, nb, list);
-	} else {
-		TAILQ_INSERT_TAIL(&(c->send_queue), nb, list);
-	}
+	TAILQ_INSERT_TAIL(&(c->send_queue), nb, list);
 }
 
 void
 net_send_stream(struct connection *c, void *data, u_int32_t len,
-    struct spdy_stream *s, int (*cb)(struct netbuf *), struct netbuf **out)
+    int (*cb)(struct netbuf *), struct netbuf **out)
 {
 	struct netbuf		*nb;
 
-	kore_debug("net_send_stream(%p, %p, %d, %p)", c, data, len, s);
+	kore_debug("net_send_stream(%p, %p, %d)", c, data, len);
 
 	nb = kore_pool_get(&nb_pool);
 	nb->cb = cb;
 	nb->owner = c;
 	nb->s_off = 0;
 	nb->buf = data;
-	nb->stream = s;
 	nb->b_len = len;
 	nb->m_len = nb->b_len;
 	nb->type = NETBUF_SEND;
@@ -155,7 +152,6 @@ net_recv_queue(struct connection *c, u_int32_t len, int flags,
 	c->rnb->b_len = len;
 	c->rnb->m_len = len;
 	c->rnb->extra = NULL;
-	c->rnb->stream = NULL;
 	c->rnb->flags = flags;
 	c->rnb->type = NETBUF_RECV;
 	c->rnb->buf = kore_malloc(c->rnb->b_len);
@@ -183,22 +179,7 @@ net_send(struct connection *c)
 
 	c->snb = TAILQ_FIRST(&(c->send_queue));
 	if (c->snb->b_len != 0) {
-		if (c->snb->stream != NULL &&
-		    (c->snb->stream->flags & SPDY_DATAFRAME_PRELUDE)) {
-			if (!spdy_dataframe_begin(c)) {
-				c->snb = NULL;
-				return (KORE_RESULT_OK);
-			}
-
-			c->snb = TAILQ_FIRST(&(c->send_queue));
-		}
-
 		smin = c->snb->b_len - c->snb->s_off;
-		if (c->snb->stream != NULL &&
-		    c->snb->stream->frame_size > 0) {
-			smin = MIN(smin, c->snb->stream->frame_size);
-		}
-
 		len = MIN(NETBUF_SEND_PAYLOAD_MAX, smin);
 
 		if (!c->write(c, len, &r))
@@ -211,8 +192,6 @@ net_send(struct connection *c)
 
 		c->snb->s_off += (size_t)r;
 		c->snb->flags &= ~NETBUF_MUST_RESEND;
-		if (c->snb->stream != NULL)
-			spdy_update_wsize(c, c->snb->stream, r);
 	}
 
 	if (c->snb->s_off == c->snb->b_len ||
@@ -249,7 +228,7 @@ net_recv_flush(struct connection *c)
 	kore_debug("net_recv_flush(%p)", c);
 
 	if (c->rnb == NULL)
-		fatal("net_recv_flush(): c->rnb == NULL");
+		return (KORE_RESULT_OK);
 
 	while (c->flags & CONN_READ_POSSIBLE) {
 		if (!c->read(c, &r))
@@ -275,12 +254,11 @@ net_recv_flush(struct connection *c)
 void
 net_remove_netbuf(struct netbuf_head *list, struct netbuf *nb)
 {
-	kore_debug("net_remove_netbuf(%p, %p, %p)", list, nb, nb->stream);
+	kore_debug("net_remove_netbuf(%p, %p)", list, nb);
 
 	if (nb->type == NETBUF_RECV)
 		fatal("net_remove_netbuf(): cannot remove recv netbuf");
 
-	nb->stream = NULL;
 	if (nb->flags & NETBUF_MUST_RESEND) {
 		kore_debug("retaining %p (MUST_RESEND)", nb);
 		nb->flags |= NETBUF_FORCE_REMOVE;
@@ -315,6 +293,19 @@ net_write_ssl(struct connection *c, int len, int *written)
 			c->snb->flags |= NETBUF_MUST_RESEND;
 			c->flags &= ~CONN_WRITE_POSSIBLE;
 			return (KORE_RESULT_OK);
+		case SSL_ERROR_SYSCALL:
+			switch (errno) {
+			case EINTR:
+				*written = 0;
+				return (KORE_RESULT_OK);
+			case EAGAIN:
+				c->snb->flags |= NETBUF_MUST_RESEND;
+				c->flags &= ~CONN_WRITE_POSSIBLE;
+				return (KORE_RESULT_OK);
+			default:
+				break;
+			}
+			/* FALLTHROUGH */
 		default:
 			kore_debug("SSL_write(): %s", ssl_errno_s);
 			return (KORE_RESULT_ERROR);
@@ -343,6 +334,19 @@ net_read_ssl(struct connection *c, int *bytes)
 		case SSL_ERROR_WANT_WRITE:
 			c->flags &= ~CONN_READ_POSSIBLE;
 			return (KORE_RESULT_OK);
+		case SSL_ERROR_SYSCALL:
+			switch (errno) {
+			case EINTR:
+				*bytes = 0;
+				return (KORE_RESULT_OK);
+			case EAGAIN:
+				c->snb->flags |= NETBUF_MUST_RESEND;
+				c->flags &= ~CONN_WRITE_POSSIBLE;
+				return (KORE_RESULT_OK);
+			default:
+				break;
+			}
+			/* FALLTHROUGH */
 		default:
 			kore_debug("SSL_read(): %s", ssl_errno_s);
 			return (KORE_RESULT_ERROR);
@@ -363,6 +367,8 @@ net_write(struct connection *c, int len, int *written)
 	if (r <= -1) {
 		switch (errno) {
 		case EINTR:
+			*written = 0;
+			return (KORE_RESULT_OK);
 		case EAGAIN:
 			c->flags &= ~CONN_WRITE_POSSIBLE;
 			return (KORE_RESULT_OK);
@@ -386,6 +392,8 @@ net_read(struct connection *c, int *bytes)
 	if (r <= 0) {
 		switch (errno) {
 		case EINTR:
+			*bytes = 0;
+			return (KORE_RESULT_OK);
 		case EAGAIN:
 			c->flags &= ~CONN_READ_POSSIBLE;
 			return (KORE_RESULT_OK);
